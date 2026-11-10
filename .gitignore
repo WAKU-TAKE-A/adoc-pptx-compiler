@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.pptx
+!samples/*.adoc
+.pytest_cache/
