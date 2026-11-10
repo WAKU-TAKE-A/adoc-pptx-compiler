@@ -59,7 +59,7 @@ def all_texts(prs):
 
 
 def test_version():
-    assert mod.__version__ == "0.9.0.0"
+    assert mod.__version__ == "0.9.1.0"
 
 
 def test_app_base_dir_script_mode():
@@ -161,3 +161,37 @@ def test_frontend_asciidoc_py(tmp_path):
     joined = "\n".join(all_texts(prs))
     assert "サンプル文書" in joined
     assert "長い節の項目 20" in joined
+
+
+BOOK = """<?xml version="1.0" encoding="UTF-8"?>
+<book>
+  <bookinfo><title>本の文書</title></bookinfo>
+  <preface><title>まえがき</title><simpara>前文のテキスト</simpara></preface>
+  <chapter>
+    <title>第一章</title>
+    <simpara>章の本文</simpara>
+    <section><title>小節</title><simpara>小節の本文</simpara></section>
+    <literallayout>リテラル行1
+リテラル行2</literallayout>
+    <variablelist>
+      <varlistentry><term>用語A</term>
+        <listitem><simpara>用語Aの定義</simpara></listitem></varlistentry>
+    </variablelist>
+  </chapter>
+</book>
+"""
+
+
+def test_book_chapters_and_blocks(tmp_path):
+    xml = tmp_path / "book.xml"
+    xml.write_text(BOOK, encoding="utf-8")
+    out = tmp_path / "book.pptx"
+    report = mod.compile_adoc(str(xml), str(out))
+    assert report["slides"] == 3  # title + preface + chapter
+    assert not any(u.startswith("block:") for u in report["unsupported"])
+    prs = Presentation(str(out))
+    joined = "\n".join(all_texts(prs))
+    assert "前文のテキスト" in joined
+    assert "章の本文" in joined and "小節の本文" in joined
+    assert "リテラル行1" in joined and "リテラル行2" in joined
+    assert "用語A" in joined and "用語Aの定義" in joined

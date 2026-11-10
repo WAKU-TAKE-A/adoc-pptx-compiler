@@ -21,7 +21,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
-__version__ = "0.9.0.0"
+__version__ = "0.9.1.0"
 
 _WS = _re.compile(r"\s+")
 
@@ -331,8 +331,21 @@ class DocBookParser:
                     idx = len(self.doc.footnotes)
                     add(f"[{idx}]", bold=bold, italic=italic, mono=mono, href=href)
                     runs[-1].note_index = idx
-                elif name in ("subscript", "superscript"):
+                elif name in ("subscript", "superscript", "phrase"):
                     walk(child, bold=bold, italic=italic, mono=mono, href=href)
+                elif name == "inlinemediaobject":
+                    # Inline images degrade to their alt text in this version.
+                    self.doc.unsupported.append(
+                        "inline:inlinemediaobject(alt text only)")
+                    alt = ""
+                    for node in child.iter():
+                        if _ln(node.tag) == "phrase":
+                            alt = _text(node).strip()
+                            break
+                    add(alt, bold=bold, italic=True, mono=mono, href=href)
+                    add(child.tail or "", bold=bold, italic=italic, mono=mono,
+                        href=href)
+                    continue
                 else:
                     self.doc.unsupported.append("inline:" + name)
                     walk(child, bold=bold, italic=italic, mono=mono, href=href)
@@ -412,7 +425,7 @@ class DocBookParser:
             name = _ln(child.tag)
             if name == "title":
                 continue
-            if name == "section":
+            if name in ("section", "chapter"):
                 sub = self.parse_blocks(child, level + 1)
                 section.blocks.append(SubHeading(text=sub.title, level=level + 1))
                 section.blocks.extend(sub.blocks)
@@ -450,6 +463,22 @@ class DocBookParser:
             elif name in ("programlisting", "screen"):
                 section.blocks.append(ListingBlock(
                     text=_text(child), language=child.get("language", "")))
+            elif name == "literallayout":
+                section.blocks.append(ListingBlock(text=_text(child)))
+            elif name == "variablelist":
+                block = ListBlock(ordered=False)
+                for entry in _kids(child, "varlistentry"):
+                    term = _text(_first(entry, "term")).strip()
+                    item = ListItem()
+                    if term:
+                        item.runs.append(Run(text=term + ": ", bold=True))
+                    for li in _kids(entry, "listitem"):
+                        for p in li:
+                            if _ln(p.tag) in ("simpara", "para"):
+                                item.runs.extend(self.inline_runs(p))
+                    item.runs = self._trim_runs(item.runs)
+                    block.items.append(item)
+                section.blocks.append(block)
             elif name in ("note", "tip", "warning", "caution", "important"):
                 runs = []
                 for p in child:
@@ -504,7 +533,7 @@ class DocBookParser:
         has_front = False
         for child in root:
             name = _ln(child.tag)
-            if name == "section":
+            if name in ("section", "chapter", "preface"):
                 self.doc.sections.append(self.parse_blocks(child, 1))
             elif name in ("articleinfo", "info", "bookinfo", "title", "subtitle"):
                 continue

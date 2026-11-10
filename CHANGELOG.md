@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1.0 (2026-11-11)
+
+- doctype book 対応: `<chapter>` と `<preface>` を節として扱う。
+- `<literallayout>`（AsciiDoc の `....` リテラルブロック）を等幅ブロックとして描画。
+- `<variablelist>`（`用語:: 定義` のラベル付きリスト）を太字の用語付き箇条書きとして描画。
+
 ## 0.9.0.0 (2026-11-11)
 
 - 初版。AsciiDoc → DocBook XML → スライド写像 → テキスト計測レイアウト →
