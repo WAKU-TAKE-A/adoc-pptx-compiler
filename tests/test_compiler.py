@@ -59,7 +59,7 @@ def all_texts(prs):
 
 
 def test_version():
-    assert mod.__version__ == "0.9.3.0"
+    assert mod.__version__ == "0.9.3.1"
 
 
 def test_app_base_dir_script_mode():
@@ -318,3 +318,27 @@ def test_line_chars_narrows_text_column(tmp_path):
     widths2 = [s.width / 914400 for s in slide2.shapes
                if s.has_text_frame and "本文の段落" in s.text_frame.text]
     assert widths2 and widths2[0] > 11.0
+
+
+INLINE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<article><articleinfo><title>文中の画像</title></articleinfo>
+<section><title>節</title>
+<simpara>文の途中に <inlinemediaobject><imageobject>
+<imagedata fileref="lena.jpg"/></imageobject><textobject>
+<phrase>lena.jpg</phrase></textobject></inlinemediaobject> があります。</simpara>
+</section></article>
+"""
+
+
+def test_inline_image_message_is_explained(tmp_path, capsys):
+    xml = tmp_path / "inline.xml"
+    xml.write_text(INLINE_XML, encoding="utf-8")
+    out = tmp_path / "inline.pptx"
+    assert mod.main([str(xml), str(out)]) == 0
+    text = capsys.readouterr().out
+    assert "inlinemediaobject" in text
+    assert "代替テキスト" in text
+    # the alt text itself is in the deck, not silently dropped
+    prs = Presentation(str(out))
+    joined = "\n".join(all_texts(prs))
+    assert "lena.jpg" in joined

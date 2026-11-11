@@ -21,7 +21,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
-__version__ = "0.9.3.0"
+__version__ = "0.9.3.1"
 
 _WS = _re.compile(r"\s+")
 
@@ -1423,8 +1423,14 @@ def main(argv=None):
     print(f"wrote {report['output']} ({report['slides']} slides)")
     for warning in report["warnings"]:
         print(f"warning: {warning}")
+    explanations = {
+        "inline:inlinemediaobject(alt text only)":
+            "文中のインライン画像は、画像ではなく代替テキストで表示しています"
+            "（ブロック画像 image:: は通常通り埋め込まれます）",
+    }
     for item in report["unsupported"]:
-        print(f"unsupported: {item}")
+        note = explanations.get(item)
+        print(f"unsupported: {item}" + (f" — {note}" if note else ""))
     return 0
 
 
