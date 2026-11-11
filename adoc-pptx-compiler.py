@@ -21,7 +21,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
-__version__ = "0.9.0.0"
+__version__ = "0.9.2.0"
 
 _WS = _re.compile(r"\s+")
 
@@ -96,6 +96,18 @@ class Design:
     size_caption: float = 12.0
     size_footer: float = 10.5
     line_spacing: float = 1.3
+    line_factor: float = 1.2  # font natural line-height allowance
+    _cb_explicit: bool = False
+
+    def set_orientation(self, portrait):
+        """Force portrait (True) or landscape (False) by swapping the slide
+        dimensions when needed, and re-derive the content area."""
+        if portrait and self.slide_w > self.slide_h:
+            self.slide_w, self.slide_h = self.slide_h, self.slide_w
+        if not portrait and self.slide_h > self.slide_w:
+            self.slide_w, self.slide_h = self.slide_h, self.slide_w
+        if not self._cb_explicit:
+            self.content_bottom = self.slide_h - 0.6
 
     @property
     def content_width(self):
@@ -107,27 +119,52 @@ class Design:
 
 
 def load_design(path):
+    """Load a design TOML file. Recognised keys:
+
+    [colors] band, accent, text, sub, light, code_bg   (hex strings)
+    [fonts]  heading, body, mono                      (font family names)
+    [sizes]  title_band, body, subheading, table, code, caption, footer
+    [page]   slide_w, slide_h, margin_x, band_h, content_top, content_bottom,
+             line_spacing, line_factor                (inches / points)
+    """
     design = Design()
     if not path:
         return design
     import tomllib
 
+    keymap = {
+        "colors": {"band": "color_band", "accent": "color_accent",
+                   "text": "color_text", "sub": "color_sub",
+                   "light": "color_light", "code_bg": "color_code_bg"},
+        "fonts": {"heading": "font_heading", "body": "font_body",
+                  "mono": "font_mono"},
+        "sizes": {"title_band": "size_title_band", "body": "size_body",
+                  "subheading": "size_subheading", "table": "size_table",
+                  "code": "size_code", "caption": "size_caption",
+                  "footer": "size_footer"},
+        "page": {"slide_w": "slide_w", "slide_h": "slide_h",
+                 "margin_x": "margin_x", "band_h": "band_h",
+                 "content_top": "content_top",
+                 "content_bottom": "content_bottom",
+                 "line_spacing": "line_spacing",
+                 "line_factor": "line_factor"},
+    }
     with open(resolve_input_path(path), "rb") as fh:
         data = tomllib.load(fh)
-    for section in ("colors", "fonts", "sizes", "page"):
+    unknown = []
+    for section, keys in keymap.items():
         for key, value in data.get(section, {}).items():
-            attr = f"{section[:-1]}_{key}" if section != "page" else key
-            if section == "colors":
-                attr = "color_" + key
-            elif section == "fonts":
-                attr = "font_" + key
-            elif section == "sizes":
-                attr = "size_" + key
-            if hasattr(design, attr):
+            attr = keys.get(key)
+            if attr is None:
+                unknown.append(f"{section}.{key}")
+            else:
                 setattr(design, attr, value)
-    for key, value in data.get("design", {}).items():
-        if hasattr(design, key):
-            setattr(design, key, value)
+                if attr == "content_bottom":
+                    design._cb_explicit = True
+    for section in data:
+        if section not in keymap:
+            unknown.append(section)
+    design.unknown_keys = unknown
     return design
 
 
@@ -260,6 +297,7 @@ class Section:
 
 @dataclass
 class Document:
+    kind: str = ""  # DocBook root element: article / book / ...
     title: str = ""
     meta: list = field(default_factory=list)  # author / date strings
     sections: list = field(default_factory=list)
@@ -331,8 +369,21 @@ class DocBookParser:
                     idx = len(self.doc.footnotes)
                     add(f"[{idx}]", bold=bold, italic=italic, mono=mono, href=href)
                     runs[-1].note_index = idx
-                elif name in ("subscript", "superscript"):
+                elif name in ("subscript", "superscript", "phrase"):
                     walk(child, bold=bold, italic=italic, mono=mono, href=href)
+                elif name == "inlinemediaobject":
+                    # Inline images degrade to their alt text in this version.
+                    self.doc.unsupported.append(
+                        "inline:inlinemediaobject(alt text only)")
+                    alt = ""
+                    for node in child.iter():
+                        if _ln(node.tag) == "phrase":
+                            alt = _text(node).strip()
+                            break
+                    add(alt, bold=bold, italic=True, mono=mono, href=href)
+                    add(child.tail or "", bold=bold, italic=italic, mono=mono,
+                        href=href)
+                    continue
                 else:
                     self.doc.unsupported.append("inline:" + name)
                     walk(child, bold=bold, italic=italic, mono=mono, href=href)
@@ -412,7 +463,7 @@ class DocBookParser:
             name = _ln(child.tag)
             if name == "title":
                 continue
-            if name == "section":
+            if name in ("section", "chapter"):
                 sub = self.parse_blocks(child, level + 1)
                 section.blocks.append(SubHeading(text=sub.title, level=level + 1))
                 section.blocks.extend(sub.blocks)
@@ -450,6 +501,22 @@ class DocBookParser:
             elif name in ("programlisting", "screen"):
                 section.blocks.append(ListingBlock(
                     text=_text(child), language=child.get("language", "")))
+            elif name == "literallayout":
+                section.blocks.append(ListingBlock(text=_text(child)))
+            elif name == "variablelist":
+                block = ListBlock(ordered=False)
+                for entry in _kids(child, "varlistentry"):
+                    term = _text(_first(entry, "term")).strip()
+                    item = ListItem()
+                    if term:
+                        item.runs.append(Run(text=term + ": ", bold=True))
+                    for li in _kids(entry, "listitem"):
+                        for p in li:
+                            if _ln(p.tag) in ("simpara", "para"):
+                                item.runs.extend(self.inline_runs(p))
+                    item.runs = self._trim_runs(item.runs)
+                    block.items.append(item)
+                section.blocks.append(block)
             elif name in ("note", "tip", "warning", "caution", "important"):
                 runs = []
                 for p in child:
@@ -473,6 +540,7 @@ class DocBookParser:
     def parse(self, xml_path):
         tree = ET.parse(xml_path)
         root = tree.getroot()
+        self.doc.kind = _ln(root.tag)
         info = _first(root, "articleinfo")
         if info is None:
             info = _first(root, "info")
@@ -504,7 +572,7 @@ class DocBookParser:
         has_front = False
         for child in root:
             name = _ln(child.tag)
-            if name == "section":
+            if name in ("section", "chapter", "preface"):
                 self.doc.sections.append(self.parse_blocks(child, 1))
             elif name in ("articleinfo", "info", "bookinfo", "title", "subtitle"):
                 continue
@@ -581,12 +649,23 @@ class Measurer:
         return font
 
     def char_width_pt(self, ch, family, size_pt, bold=False, mono=False):
+        wide = unicodedata.east_asian_width(ch) in _WIDE
         if mono:
-            return size_pt * 0.6
+            # Monospace latin is 0.6em; full-width glyphs stay 1em even in a
+            # monospace stack (and render so in fallback fonts).
+            return size_pt * (1.0 if wide else 0.6)
         font = self._pil_font(family, size_pt, bold)
         if font is not None:
             try:
-                return font.getlength(ch) / 4.0
+                width = font.getlength(ch) / 4.0
+                if wide and width < size_pt * 0.9:
+                    # The matched font almost certainly lacks this glyph
+                    # (a .notdef box measures ~0.6em). Full-width glyphs are
+                    # 1em in every CJK-capable font, so use that instead of
+                    # under-measuring and overlapping the rendered text.
+                    self.used_fallback = True
+                    return size_pt * 1.0
+                return width
             except RuntimeError:
                 # Pillow built without a working raqm layout for this font:
                 # disable real-font measurement for the rest of the run.
@@ -662,7 +741,8 @@ class Measurer:
         return merged
 
     def line_height_in(self, size_pt):
-        return size_pt * self.design.line_spacing / 72.0
+        d = self.design
+        return size_pt * d.line_spacing * d.line_factor / 72.0
 
 
 # --------------------------------------------------------------------------
@@ -693,6 +773,7 @@ class LayoutEngine:
         self.m = measurer
         self.src_dir = src_dir
         self.warnings = []
+        self.toc_entries = []  # (level, title, content page index)
 
     # -- atomizers ------------------------------------------------------
     def _lines_atoms(self, runs, size_pt, width_in, prefix_runs_list=None,
@@ -809,8 +890,11 @@ class LayoutEngine:
         raw_lines = block.text.strip("\n").split("\n") or [""]
         runs_lines = []
         for raw in raw_lines:
+            # Wrap listings a little narrower than the box: monospace
+            # fallback metrics differ between renderers, and an extra
+            # wrapped line would spill out of the background box.
             wrapped = self.m.wrap([Run(text=raw)], d.font_mono, d.size_code,
-                                  d.content_width - 0.24, mono=True)
+                                  (d.content_width - 0.24) * 0.9, mono=True)
             runs_lines.extend(wrapped)
         line_h = self.m.line_height_in(d.size_code)
         max_lines = max(1, int((d.content_height - 0.2) / line_h))
@@ -862,6 +946,7 @@ class LayoutEngine:
             atoms = []
             for block in section.blocks:
                 atoms.extend(self._block_atoms(block))
+            self.toc_entries.append((1, section.title, len(pages)))
             page = Page(title=section.title, cont=0)
             y = 0.0
             cont = 0
@@ -882,6 +967,9 @@ class LayoutEngine:
                         f"oversize block on page '{section.title}': "
                         f"{atom.kind} ({atom.height:.2f}in)")
                 page.atoms.append(atom)
+                if atom.kind == "subheading":
+                    self.toc_entries.append(
+                        (2, atom.data["text"], len(pages)))
                 y += atom.height + 0.08
                 for idx in atom.notes:
                     text = self.doc.footnotes[idx - 1] \
@@ -910,12 +998,13 @@ def _rgb(hexstr):
 
 
 def _set_run_font(run, design, size, bold=False, italic=False, mono=False,
-                  color="color_text", href=None):
+                  color="color_text", href=None, family=None):
     font = run.font
     font.size = Pt(size)
     font.bold = bold
     font.italic = italic
-    family = design.font_mono if mono else design.font_body
+    if family is None:
+        family = design.font_mono if mono else design.font_body
     font.name = family
     font.color.rgb = _rgb(getattr(design, color))
     # East Asian font (python-pptx sets the latin typeface only)
@@ -984,11 +1073,13 @@ class Renderer:
 
     def _footer(self, slide):
         d = self.design
-        _, tf = _textbox(slide, d.margin_x, 7.06, 9.0, 0.3)
+        fy = d.slide_h - 0.44
+        _, tf = _textbox(slide, d.margin_x, fy,
+                         d.slide_w - 2 * d.margin_x - 1.1, 0.3)
         run = tf.paragraphs[0].add_run()
         run.text = self.doc.title
         _set_run_font(run, d, d.size_footer, color="color_sub")
-        _, tf = _textbox(slide, d.slide_w - d.margin_x - 1.0, 7.06, 1.0, 0.3)
+        _, tf = _textbox(slide, d.slide_w - d.margin_x - 1.0, fy, 1.0, 0.3)
         para = tf.paragraphs[0]
         para.alignment = PP_ALIGN.RIGHT
         run = para.add_run()
@@ -998,15 +1089,18 @@ class Renderer:
     def title_slide(self):
         d = self.design
         slide = self._new_slide(bg=d.color_band)
-        _rect(slide, d.margin_x, 3.32, 2.2, 0.06, d.color_accent)
-        _, tf = _textbox(slide, d.margin_x, 2.2, d.content_width, 1.6)
+        title_y = d.slide_h * 0.29
+        _rect(slide, d.margin_x, d.slide_h * 0.44, 2.2, 0.06, d.color_accent)
+        _, tf = _textbox(slide, d.margin_x, title_y, d.content_width, 1.6)
         tf.word_wrap = True
         run = tf.paragraphs[0].add_run()
         run.text = self.doc.title
-        _set_run_font(run, d, 40, bold=True, color="color_light")
+        _set_run_font(run, d, 40, bold=True, color="color_light",
+                      family=d.font_heading)
         run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
         if self.doc.meta:
-            _, tf = _textbox(slide, d.margin_x, 3.6, d.content_width, 0.8)
+            _, tf = _textbox(slide, d.margin_x, d.slide_h * 0.485,
+                             d.content_width, 0.8)
             run = tf.paragraphs[0].add_run()
             run.text = "　/　".join(self.doc.meta)
             _set_run_font(run, d, 16, color="color_light")
@@ -1023,7 +1117,8 @@ class Renderer:
         if page.cont > 0:
             title += "（続き）"
         run.text = title
-        _set_run_font(run, d, d.size_title_band, bold=True)
+        _set_run_font(run, d, d.size_title_band, bold=True,
+                      family=d.font_heading)
         run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
         y = d.content_top
         for atom in page.atoms:
@@ -1058,7 +1153,7 @@ class Renderer:
             run = tf.paragraphs[0].add_run()
             run.text = data["text"]
             _set_run_font(run, d, d.size_subheading, bold=True,
-                          color="color_band")
+                          color="color_band", family=d.font_heading)
             return y + atom.height
         if atom.kind == "listing":
             _rect(slide, x, y, d.content_width, atom.height, d.color_code_bg)
@@ -1134,9 +1229,42 @@ class Renderer:
                     ("FFFFFF" if ri % 2 == 0 else "EFF3F9"))
         return y + atom.height
 
-    def render(self, pages, out_path):
+    def toc_slide(self, entries, toc_title):
+        d = self.design
+        slide = self._new_slide()
+        _rect(slide, 0, 0, d.slide_w, d.band_h, d.color_band)
+        _rect(slide, 0, d.band_h + 0.1, d.slide_w, 0.045, d.color_accent)
+        _, tf = _textbox(slide, d.margin_x, 0.18, d.content_width, 0.65)
+        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+        run = tf.paragraphs[0].add_run()
+        run.text = toc_title
+        _set_run_font(run, d, d.size_title_band, bold=True,
+                      family=d.font_heading)
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        y = d.content_top
+        for level, title, slide_no in entries:
+            indent = 0.35 * (level - 1)
+            size = 15.0 if level == 1 else 13.0
+            _, tf = _textbox(slide, d.margin_x + indent, y,
+                             d.content_width - indent - 0.85, 0.34)
+            run = tf.paragraphs[0].add_run()
+            run.text = title
+            _set_run_font(run, d, size, bold=(level == 1))
+            _, tf = _textbox(slide, d.slide_w - d.margin_x - 0.8, y, 0.8, 0.34)
+            para = tf.paragraphs[0]
+            para.alignment = PP_ALIGN.RIGHT
+            run = para.add_run()
+            run.text = str(slide_no)
+            _set_run_font(run, d, size, color="color_sub")
+            y += 0.44
+        self._footer(slide)
+
+    def render(self, pages, out_path, toc=None):
         if self.doc.title:
             self.title_slide()
+        if toc:
+            for chunk in toc["chunks"]:
+                self.toc_slide(chunk, toc["title"])
         for page in pages:
             self.content_slide(page)
         parent = os.path.dirname(os.path.abspath(out_path))
@@ -1150,30 +1278,76 @@ class Renderer:
 # --------------------------------------------------------------------------
 
 
+def scan_adoc_options(src_path):
+    """Read document attributes that DocBook does not carry: :toc: and
+    :toc-title: from an .adoc source. Returns {} for non-AsciiDoc input."""
+    options = {"toc": False, "toc_title": "目次"}
+    if not src_path.lower().endswith((".adoc", ".asciidoc", ".txt")):
+        return options
+    try:
+        with open(src_path, encoding="utf-8", errors="replace") as fh:
+            head = fh.read(20000)
+    except OSError:
+        return options
+    if _re.search(r"^:toc:\s*$", head, _re.M):
+        options["toc"] = True
+    m = _re.search(r"^:toc-title:\s*(.+)$", head, _re.M)
+    if m:
+        options["toc_title"] = m.group(1).strip()
+    return options
+
+
 def compile_adoc(src, dst, design=None, frontend="auto", overflow="continue",
-                 keep_ir=None, report_path=None):
+                 keep_ir=None, report_path=None, orientation="auto",
+                 toc="auto"):
     src_abs = resolve_input_path(src)
     if not os.path.isfile(src_abs):
         raise FileNotFoundError(f"input not found: {src}")
     design = design or Design()
+    options = scan_adoc_options(src_abs)
     xml_path = obtain_docbook(src_abs, frontend=frontend, keep_ir=keep_ir)
     doc = parse_docbook(xml_path)
+    # Orientation: books are portrait, everything else landscape, unless
+    # the caller or the design file says otherwise.
+    portrait = orientation == "portrait" or \
+        (orientation == "auto" and doc.kind == "book")
+    design.set_orientation(portrait)
     src_dir = os.path.dirname(src_abs)
     measurer = Measurer(design)
     engine = LayoutEngine(doc, design, measurer, src_dir)
     pages = engine.paginate(overflow=overflow)
+    # Table of contents
+    want_toc = toc == "always" or \
+        (toc == "auto" and (options["toc"] or doc.kind == "book"))
+    toc_info = None
+    toc_pages = 0
+    if want_toc and engine.toc_entries:
+        capacity = max(1, int(design.content_height / 0.44))
+        toc_pages = -(-len(engine.toc_entries) // capacity)
+        first_content_slide = (1 if doc.title else 0) + toc_pages + 1
+        numbered = [(level, title, first_content_slide + page_index)
+                    for level, title, page_index in engine.toc_entries]
+        chunks = [numbered[i:i + capacity]
+                  for i in range(0, len(numbered), capacity)]
+        toc_info = {"title": options["toc_title"], "chunks": chunks}
     renderer = Renderer(doc, design)
     out_abs = resolve_output_path(dst)
-    n_slides = renderer.render(pages, out_abs)
+    n_slides = renderer.render(pages, out_abs, toc=toc_info)
     report = {
         "tool": "adoc-pptx-compiler",
         "version": __version__,
         "input": src_abs,
         "output": out_abs,
+        "doctitle": doc.title,
+        "kind": doc.kind,
+        "orientation": "portrait" if design.slide_h > design.slide_w
+                       else "landscape",
+        "toc": bool(toc_info),
         "slides": n_slides,
         "measurement_fallback": measurer.used_fallback,
         "warnings": engine.warnings,
         "unsupported": sorted(set(doc.unsupported)),
+        "design_unknown_keys": getattr(design, "unknown_keys", []),
     }
     if report_path:
         with open(resolve_output_path(report_path), "w",
@@ -1194,6 +1368,15 @@ def main(argv=None):
     parser.add_argument("--overflow", choices=["continue", "error"],
                         default="continue",
                         help="what to do when a section exceeds one page")
+    parser.add_argument("--orientation",
+                        choices=["auto", "landscape", "portrait"],
+                        default="auto",
+                        help="slide orientation (default: auto = book: "
+                             "portrait, article: landscape)")
+    parser.add_argument("--toc", choices=["auto", "always", "never"],
+                        default="auto",
+                        help="table of contents page (default: auto = "
+                             "when :toc: is set or the document is a book)")
     parser.add_argument("--keep-ir", help="also save the DocBook XML here")
     parser.add_argument("--report", help="write a JSON report here")
     parser.add_argument("--version", action="version",
@@ -1203,7 +1386,8 @@ def main(argv=None):
         design = load_design(args.design) if args.design else Design()
         report = compile_adoc(args.src, args.dst, design=design,
                               frontend=args.frontend, overflow=args.overflow,
-                              keep_ir=args.keep_ir, report_path=args.report)
+                              keep_ir=args.keep_ir, report_path=args.report,
+                              orientation=args.orientation, toc=args.toc)
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

@@ -59,7 +59,7 @@ def all_texts(prs):
 
 
 def test_version():
-    assert mod.__version__ == "0.9.0.0"
+    assert mod.__version__ == "0.9.2.0"
 
 
 def test_app_base_dir_script_mode():
@@ -161,3 +161,111 @@ def test_frontend_asciidoc_py(tmp_path):
     joined = "\n".join(all_texts(prs))
     assert "サンプル文書" in joined
     assert "長い節の項目 20" in joined
+
+
+BOOK = """<?xml version="1.0" encoding="UTF-8"?>
+<book>
+  <bookinfo><title>本の文書</title></bookinfo>
+  <preface><title>まえがき</title><simpara>前文のテキスト</simpara></preface>
+  <chapter>
+    <title>第一章</title>
+    <simpara>章の本文</simpara>
+    <section><title>小節</title><simpara>小節の本文</simpara></section>
+    <literallayout>リテラル行1
+リテラル行2</literallayout>
+    <variablelist>
+      <varlistentry><term>用語A</term>
+        <listitem><simpara>用語Aの定義</simpara></listitem></varlistentry>
+    </variablelist>
+  </chapter>
+</book>
+"""
+
+
+def test_book_chapters_and_blocks(tmp_path):
+    xml = tmp_path / "book.xml"
+    xml.write_text(BOOK, encoding="utf-8")
+    out = tmp_path / "book.pptx"
+    report = mod.compile_adoc(str(xml), str(out))
+    assert report["slides"] == 4  # title + TOC + preface + chapter
+    assert report["orientation"] == "portrait"
+    assert report["toc"] is True
+    assert not any(u.startswith("block:") for u in report["unsupported"])
+    prs = Presentation(str(out))
+    joined = "\n".join(all_texts(prs))
+    assert "前文のテキスト" in joined
+    assert "章の本文" in joined and "小節の本文" in joined
+    assert "リテラル行1" in joined and "リテラル行2" in joined
+    assert "用語A" in joined and "用語Aの定義" in joined
+
+
+def test_book_is_portrait_article_is_landscape(tmp_path):
+    xml = tmp_path / "book.xml"
+    xml.write_text(BOOK, encoding="utf-8")
+    out = tmp_path / "book.pptx"
+    mod.compile_adoc(str(xml), str(out))
+    prs = Presentation(str(out))
+    assert prs.slide_height > prs.slide_width
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            assert shape.left + shape.width <= prs.slide_width + 1000
+            assert shape.top + shape.height <= prs.slide_height + 1000
+    xml2 = tmp_path / "doc.xml"
+    xml2.write_text(DOCBOOK, encoding="utf-8")
+    out2 = tmp_path / "doc.pptx"
+    report = mod.compile_adoc(str(xml2), str(out2))
+    assert report["orientation"] == "landscape"
+    assert report["toc"] is False
+    prs2 = Presentation(str(out2))
+    assert prs2.slide_width > prs2.slide_height
+
+
+def test_orientation_override(tmp_path):
+    xml = tmp_path / "book.xml"
+    xml.write_text(BOOK, encoding="utf-8")
+    out = tmp_path / "book.pptx"
+    report = mod.compile_adoc(str(xml), str(out),
+                              orientation="landscape", toc="never")
+    assert report["orientation"] == "landscape"
+    assert report["slides"] == 3
+
+
+def test_toc_page_numbers(tmp_path):
+    xml = tmp_path / "doc.xml"
+    xml.write_text(DOCBOOK, encoding="utf-8")
+    out = tmp_path / "toc.pptx"
+    report = mod.compile_adoc(str(xml), str(out), toc="always")
+    assert report["slides"] == 4  # title + TOC + 2 sections
+    prs = Presentation(str(out))
+    toc_slide = list(prs.slides)[1]
+    texts = [s.text_frame.text for s in toc_slide.shapes
+             if s.has_text_frame]
+    joined = "\n".join(texts)
+    assert "目次" in joined
+    assert "最初の節" in joined and "表の節" in joined
+    assert "3" in texts and "4" in texts  # slide numbers of the sections
+
+
+def test_design_override(tmp_path):
+    toml = tmp_path / "design.toml"
+    toml.write_text('[colors]\nband = "FF0000"\n[sizes]\nbody = 20\n',
+                    encoding="utf-8")
+    design = mod.load_design(str(toml))
+    assert design.color_band == "FF0000"
+    assert design.size_body == 20
+    assert design.unknown_keys == []
+    xml = tmp_path / "doc.xml"
+    xml.write_text(DOCBOOK, encoding="utf-8")
+    out = tmp_path / "designed.pptx"
+    mod.compile_adoc(str(xml), str(out), design=design)
+    prs = Presentation(str(out))
+    content = list(prs.slides)[1]
+    band = content.shapes[0]
+    assert str(band.fill.fore_color.rgb) == "FF0000"
+
+
+def test_measurer_fullwidth_rules():
+    m = mod.Measurer(mod.Design())
+    # monospace: full-width glyphs measure 1em, latin 0.6em
+    assert m.char_width_pt("あ", "Consolas", 10.0, mono=True) == 10.0
+    assert m.char_width_pt("a", "Consolas", 10.0, mono=True) == 6.0
