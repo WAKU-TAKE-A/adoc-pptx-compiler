@@ -59,7 +59,7 @@ def all_texts(prs):
 
 
 def test_version():
-    assert mod.__version__ == "0.9.4.0"
+    assert mod.__version__ == "0.9.5.0"
 
 
 def test_app_base_dir_script_mode():
@@ -409,3 +409,88 @@ def test_subtitle_size_in_design_toml(tmp_path):
     assert design.size_title == 44
     assert design.size_subtitle == 30
     assert design.unknown_keys == []
+
+
+REV_ADOC = """= テスト文書
+:author:
+:revdate: 2024年06月15日
+:revnumber: 1.0版
+:version-label:
+
+== 節
+
+本文です。
+"""
+
+
+def test_scan_revision_attributes(tmp_path):
+    src = tmp_path / "rev.adoc"
+    src.write_text(REV_ADOC, encoding="utf-8")
+    options = mod.scan_adoc_options(str(src))
+    assert options["author"] == ""
+    assert options["revnumber"] == "1.0版"
+    assert options["revdate"] == "2024年06月15日"
+    assert options["version_label"] == ""
+
+
+def test_revision_line_suppresses_label(tmp_path):
+    src = tmp_path / "rev.adoc"
+    src.write_text(REV_ADOC, encoding="utf-8")
+    out = tmp_path / "rev.pptx"
+    assert mod.main([str(src), str(out)]) == 0
+    prs = Presentation(str(out))
+    title_texts = [s.text_frame.text for s in prs.slides[0].shapes
+                   if s.has_text_frame]
+    joined = "\n".join(title_texts)
+    assert "1.0版, 2024年06月15日" in joined
+    assert "Version" not in joined
+
+
+def test_revision_line_default_label(tmp_path):
+    src = tmp_path / "rev2.adoc"
+    src.write_text(REV_ADOC.replace(":version-label:\n", "")
+                   .replace("1.0版", "2.0"), encoding="utf-8")
+    out = tmp_path / "rev2.pptx"
+    assert mod.main([str(src), str(out)]) == 0
+    prs = Presentation(str(out))
+    joined = "\n".join(all_texts(prs))
+    assert "Version 2.0" in joined
+
+
+def test_title_background_image(tmp_path):
+    from PIL import Image
+    Image.new("RGB", (800, 600), (30, 80, 160)).save(
+        str(tmp_path / "bg.png"))
+    src = tmp_path / "bg.adoc"
+    src.write_text("= 背景つき文書\n"
+                   ":title-page-background-image: image:bg.png[]\n\n"
+                   "== 節\n\n本文です。\n", encoding="utf-8")
+    out = tmp_path / "bg.pptx"
+    assert mod.main([str(src), str(out)]) == 0
+    prs = Presentation(str(out))
+    pics = [s for s in prs.slides[0].shapes
+            if s.shape_type == 13]  # PICTURE
+    assert len(pics) == 1
+    assert abs(pics[0].width - prs.slide_width) < 1000
+    assert abs(pics[0].height - prs.slide_height) < 1000
+
+
+def test_title_background_missing_warns(tmp_path, capsys):
+    src = tmp_path / "bg2.adoc"
+    src.write_text("= 背景なし文書\n"
+                   ":title-page-background-image: image:nope.jpg[]\n\n"
+                   "== 節\n\n本文です。\n", encoding="utf-8")
+    out = tmp_path / "bg2.pptx"
+    assert mod.main([str(src), str(out)]) == 0
+    assert "title-page-background-image not found" in \
+        capsys.readouterr().out
+
+
+def test_toc_title_attribute(tmp_path):
+    src = tmp_path / "toc.adoc"
+    src.write_text("= 目次テスト\n:toc:\n:toc-title: もくじ\n\n"
+                   "== 節\n\n本文です。\n", encoding="utf-8")
+    out = tmp_path / "toc.pptx"
+    assert mod.main([str(src), str(out)]) == 0
+    prs = Presentation(str(out))
+    assert "もくじ" in "\n".join(all_texts(prs))

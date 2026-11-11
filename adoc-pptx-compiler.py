@@ -21,7 +21,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
-__version__ = "0.9.4.0"
+__version__ = "0.9.5.0"
 
 _WS = _re.compile(r"\s+")
 
@@ -306,6 +306,9 @@ class Document:
     kind: str = ""  # DocBook root element: article / book / ...
     title: str = ""
     subtitle: str = ""
+    author: str = ""
+    date_text: str = ""
+    title_bg: str = ""  # title page background image (resolved path)
     meta: list = field(default_factory=list)  # author / date strings
     sections: list = field(default_factory=list)
     footnotes: list = field(default_factory=list)  # global, in encounter order
@@ -570,13 +573,16 @@ class DocBookParser:
                     if value:
                         name_parts.append(value)
                 if name_parts:
-                    self.doc.meta.append(" ".join(name_parts))
+                    self.doc.author = " ".join(name_parts)
+                    self.doc.meta.append(self.doc.author)
                 else:
                     text = _text(author).strip()
                     if text:
+                        self.doc.author = text
                         self.doc.meta.append(text)
             date = _text(_first(info, "date")).strip()
             if date:
+                self.doc.date_text = date
                 self.doc.meta.append(date)
         if not self.doc.subtitle and ": " in self.doc.title:
             # Asciidoctor partitions the title into <title> + <subtitle>,
@@ -1110,9 +1116,31 @@ class Renderer:
         run.text = str(self.page_no)
         _set_run_font(run, d, d.size_footer, color="color_sub")
 
+    def _title_bg_image(self, slide):
+        d = self.design
+        pic = slide.shapes.add_picture(self.doc.title_bg, 0, 0,
+                                       Inches(d.slide_w), Inches(d.slide_h))
+        try:
+            from PIL import Image
+            iw, ih = Image.open(self.doc.title_bg).size
+        except Exception:
+            return
+        img_aspect = iw / ih
+        slide_aspect = d.slide_w / d.slide_h
+        if img_aspect > slide_aspect:
+            crop = (1 - slide_aspect / img_aspect) / 2
+            pic.crop_left = crop
+            pic.crop_right = crop
+        elif img_aspect < slide_aspect:
+            crop = (1 - img_aspect / slide_aspect) / 2
+            pic.crop_top = crop
+            pic.crop_bottom = crop
+
     def title_slide(self):
         d = self.design
         slide = self._new_slide(bg=d.color_band)
+        if self.doc.title_bg:
+            self._title_bg_image(slide)
         measurer = Measurer(d)
         title_size = d.size_title
         title_lines = measurer.wrap([Run(self.doc.title, bold=True)],
@@ -1330,9 +1358,12 @@ class Renderer:
 
 
 def scan_adoc_options(src_path):
-    """Read document attributes that DocBook does not carry: :toc: and
-    :toc-title: from an .adoc source. Returns {} for non-AsciiDoc input."""
-    options = {"toc": False, "toc_title": "目次"}
+    """Read document attributes that DocBook does not carry (or carries
+    lossily) from an .adoc source: :toc:, :toc-title:, the revision
+    attributes :author: / :revdate: / :revnumber: / :version-label:,
+    :imagesdir:, and :title-page-background-image:.
+    Returns defaults for non-AsciiDoc input."""
+    options = {"toc": False, "toc_title": "\u76ee\u6b21"}
     if not src_path.lower().endswith((".adoc", ".asciidoc", ".txt")):
         return options
     try:
@@ -1345,6 +1376,20 @@ def scan_adoc_options(src_path):
     m = _re.search(r"^:toc-title:\s*(.+)$", head, _re.M)
     if m:
         options["toc_title"] = m.group(1).strip()
+    for name, key in (("author", "author"), ("revdate", "revdate"),
+                      ("revnumber", "revnumber"),
+                      ("version-label", "version_label"),
+                      ("imagesdir", "imagesdir")):
+        m = _re.search(rf"^:{name}:[ \t]*(.*?)[ \t]*$", head, _re.M)
+        if m:
+            options[key] = m.group(1)
+    m = _re.search(r"^:title-page-background-image:[ \t]*(.+)$", head,
+                   _re.M)
+    if m:
+        value = m.group(1).strip()
+        if value.startswith("image:"):
+            value = value[len("image:"):]
+        options["title_bg_raw"] = value.split("[", 1)[0].strip().strip('"')
     return options
 
 
@@ -1364,6 +1409,44 @@ def compile_adoc(src, dst, design=None, frontend="auto", overflow="continue",
         (orientation == "auto" and doc.kind == "book")
     design.set_orientation(portrait)
     src_dir = os.path.dirname(src_abs)
+    extra_warnings = []
+    # Revision attributes (:author:, :revnumber:, :revdate:,
+    # :version-label:) govern the title-page byline when present.
+    # :version-label: with an empty value suppresses the label, so the
+    # author can bake their preferred wording into :revnumber: itself
+    # (e.g. "1.0\u7248").
+    if any(k in options for k in
+           ("author", "revnumber", "revdate", "version_label")):
+        parts = []
+        author = options["author"] if "author" in options else doc.author
+        if author:
+            parts.append(author)
+        rev = []
+        if options.get("revnumber"):
+            label = options["version_label"] \
+                if "version_label" in options else "Version"
+            rev.append((label + " " + options["revnumber"]).strip())
+        revdate = options.get("revdate") or doc.date_text
+        if revdate:
+            rev.append(revdate)
+        if rev:
+            parts.append(", ".join(rev))
+        doc.meta = parts
+    # Title page background image (asciidoctor-pdf attribute), resolved
+    # against :imagesdir: first, then the document directory.
+    if options.get("title_bg_raw"):
+        target = options["title_bg_raw"]
+        candidates = []
+        if options.get("imagesdir"):
+            candidates.append(os.path.normpath(
+                os.path.join(src_dir, options["imagesdir"], target)))
+        candidates.append(os.path.normpath(os.path.join(src_dir, target)))
+        found = next((c for c in candidates if os.path.isfile(c)), None)
+        if found:
+            doc.title_bg = found
+        else:
+            extra_warnings.append(
+                f"title-page-background-image not found: {target}")
     measurer = Measurer(design)
     engine = LayoutEngine(doc, design, measurer, src_dir)
     pages = engine.paginate(overflow=overflow)
@@ -1399,7 +1482,8 @@ def compile_adoc(src, dst, design=None, frontend="auto", overflow="continue",
         "line_chars": design.line_chars,
         "slides": n_slides,
         "measurement_fallback": measurer.used_fallback,
-        "warnings": engine.warnings,
+        "warnings": engine.warnings + extra_warnings,
+        "title_background_image": bool(doc.title_bg),
         "unsupported": sorted(set(doc.unsupported)),
         "design_unknown_keys": getattr(design, "unknown_keys", []),
     }
