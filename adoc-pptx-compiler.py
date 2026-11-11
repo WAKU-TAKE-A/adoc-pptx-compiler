@@ -21,7 +21,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
-__version__ = "0.9.2.0"
+__version__ = "0.9.3.0"
 
 _WS = _re.compile(r"\s+")
 
@@ -97,6 +97,7 @@ class Design:
     size_footer: float = 10.5
     line_spacing: float = 1.3
     line_factor: float = 1.2  # font natural line-height allowance
+    line_chars: int = 0  # target full-width characters per line (0 = off)
     _cb_explicit: bool = False
 
     def set_orientation(self, portrait):
@@ -125,7 +126,7 @@ def load_design(path):
     [fonts]  heading, body, mono                      (font family names)
     [sizes]  title_band, body, subheading, table, code, caption, footer
     [page]   slide_w, slide_h, margin_x, band_h, content_top, content_bottom,
-             line_spacing, line_factor                (inches / points)
+             line_spacing, line_factor, line_chars    (inches / points)
     """
     design = Design()
     if not path:
@@ -147,7 +148,8 @@ def load_design(path):
                  "content_top": "content_top",
                  "content_bottom": "content_bottom",
                  "line_spacing": "line_spacing",
-                 "line_factor": "line_factor"},
+                 "line_factor": "line_factor",
+                 "line_chars": "line_chars"},
     }
     with open(resolve_input_path(path), "rb") as fh:
         data = tomllib.load(fh)
@@ -772,6 +774,13 @@ class LayoutEngine:
         self.design = design
         self.m = measurer
         self.src_dir = src_dir
+        # Reading-text column: optionally narrowed to a target number of
+        # full-width characters per line (a knob humans can reason about).
+        self.text_width = design.content_width
+        if design.line_chars:
+            self.text_width = min(
+                design.content_width,
+                design.line_chars * design.size_body / 72.0)
         self.warnings = []
         self.toc_entries = []  # (level, title, content page index)
 
@@ -805,7 +814,7 @@ class LayoutEngine:
             else:
                 prefix = "• " if level == 0 else "– "
             indent = 0.32 * level
-            width = d.content_width - indent - 0.3
+            width = self.text_width - indent - 0.3
             runs = [Run(text=prefix)] + item.runs
             sub = self._lines_atoms(runs, d.size_body, width)
             for atom in sub:
@@ -911,7 +920,7 @@ class LayoutEngine:
         label = block.kind.upper() + ": "
         runs = [Run(text=label, bold=True)] + block.runs
         atoms = self._lines_atoms(runs, d.size_body - 1.5,
-                                  d.content_width - 0.55, kind="note")
+                                  self.text_width - 0.3, kind="note")
         for atom in atoms:
             atom.height += 0.14
         return atoms
@@ -921,7 +930,7 @@ class LayoutEngine:
         if isinstance(block, Para):
             if not block.runs:
                 return []
-            return self._lines_atoms(block.runs, d.size_body, d.content_width)
+            return self._lines_atoms(block.runs, d.size_body, self.text_width)
         if isinstance(block, SubHeading):
             return [Atom(kind="subheading", data={"text": block.text},
                          height=0.55)]
@@ -1346,6 +1355,8 @@ def compile_adoc(src, dst, design=None, frontend="auto", overflow="continue",
         "orientation": "portrait" if design.slide_h > design.slide_w
                        else "landscape",
         "toc": bool(toc_info),
+        "body_size": design.size_body,
+        "line_chars": design.line_chars,
         "slides": n_slides,
         "measurement_fallback": measurer.used_fallback,
         "warnings": engine.warnings,
@@ -1380,6 +1391,11 @@ def main(argv=None):
                         default="auto",
                         help="table of contents page (default: auto = "
                              "when :toc: is set or the document is a book)")
+    parser.add_argument("--body-size", type=float,
+                        help="body font size in pt (overrides the design)")
+    parser.add_argument("--line-chars", type=int,
+                        help="target full-width characters per line for "
+                             "body text (overrides the design)")
     parser.add_argument("--keep-ir", help="also save the DocBook XML here")
     parser.add_argument("--report", help="write a JSON report here")
     parser.add_argument("--version", action="version",
@@ -1387,6 +1403,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         design = load_design(args.design) if args.design else Design()
+        if args.body_size:
+            design.size_body = args.body_size
+        if args.line_chars:
+            design.line_chars = args.line_chars
         report = compile_adoc(args.src, args.dst, design=design,
                               frontend=args.frontend, overflow=args.overflow,
                               keep_ir=args.keep_ir, report_path=args.report,

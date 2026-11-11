@@ -59,7 +59,7 @@ def all_texts(prs):
 
 
 def test_version():
-    assert mod.__version__ == "0.9.2.0"
+    assert mod.__version__ == "0.9.3.0"
 
 
 def test_app_base_dir_script_mode():
@@ -296,3 +296,25 @@ def test_nested_list_box_width_matches_wrap(tmp_path):
     # wrapped at content_width - level indent (0.32) - prefix zone (0.3)
     expected = (13.333 - 1.4 - 0.32 - 0.3) * 914400
     assert abs(target.width - expected) < 2000
+
+
+def test_line_chars_narrows_text_column(tmp_path):
+    xml = tmp_path / "doc.xml"
+    xml.write_text(DOCBOOK, encoding="utf-8")
+    design = mod.Design()
+    design.line_chars = 20  # 20 chars * 18pt = 5.0in column
+    out = tmp_path / "narrow.pptx"
+    mod.compile_adoc(str(xml), str(out), design=design)
+    prs = Presentation(str(out))
+    slide = list(prs.slides)[1]
+    widths = [s.width / 914400 for s in slide.shapes
+              if s.has_text_frame and "本文の段落" in s.text_frame.text]
+    assert widths and abs(widths[0] - 5.0) < 0.05
+    # and the default (line_chars=0) uses the full content width
+    out2 = tmp_path / "wide.pptx"
+    mod.compile_adoc(str(xml), str(out2))
+    prs2 = Presentation(str(out2))
+    slide2 = list(prs2.slides)[1]
+    widths2 = [s.width / 914400 for s in slide2.shapes
+               if s.has_text_frame and "本文の段落" in s.text_frame.text]
+    assert widths2 and widths2[0] > 11.0

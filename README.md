@@ -4,7 +4,7 @@ AsciiDoc 文書を、編集可能な PowerPoint ファイル（.pptx）にコン
 姉妹ツールの md-pptx-injector が「テンプレートへの流し込み」なのに対し、こちらは
 AsciiDoc の構造を解釈してスライドを描く「コンパイル」方式です。
 
-現在のバージョン: **0.9.2.0**
+現在のバージョン: **0.9.3.0**
 
 ## 特徴
 
@@ -45,6 +45,8 @@ python adoc-pptx-compiler.py samples/sample.adoc sample.pptx
 | `--design FILE` | デザイン設定（TOML）で色・フォント・サイズを上書き |
 | `--orientation {auto,landscape,portrait}` | スライドの向き（既定: auto＝book は縦、それ以外は横） |
 | `--toc {auto,always,never}` | 目次ページ（既定: auto＝`:toc:` があるか book のとき） |
+| `--body-size PT` | 本文のフォントサイズ（デザイン設定より優先） |
+| `--line-chars N` | 本文1行の文字数（全角換算）で本文の柱の幅を決める |
 | `--frontend {auto,asciidoctor,asciidoc-py}` | フロントエンドの選択（既定: auto） |
 | `--overflow {continue,error}` | 節が1ページを超えたときの動作（既定: continue＝続きページ） |
 | `--keep-ir FILE` | 中間表現（DocBook XML）を保存 |
@@ -65,6 +67,19 @@ python adoc-pptx-compiler.py samples/sample.adoc sample.pptx
 変更できます。書けるキーは [samples/design.toml](samples/design.toml) が
 一覧を兼ねています（同梱の値は既定値そのもの）。未知のキーは無視され、
 レポートの `design_unknown_keys` に記録されます。
+
+## 運用での調整
+
+変換は決定論的なので、見え方の微調整は「数値を変えて再変換」で行えます。
+人が触るのは次の2つで十分なことが多いです。
+
+- 文字が大きい／小さい → `--body-size`（例: `--body-size 16`）
+- 1行を短くして余白を作りたい → `--line-chars`（例: `--line-chars 22`。
+  本文の柱が「22文字 × 本文サイズ」の幅になります。表や画像は対象外）
+
+恒常的に使う値は `--design` の TOML（`[sizes] body`、`[page] line_chars`）に
+書いておけます。環境によってフォントが差し替わり行の高さがずれる場合は、
+`[page] line_factor`（既定 1.2）を少し上げると重なり方向のずれを吸収できます。
 
 ## パスの解決規則
 
