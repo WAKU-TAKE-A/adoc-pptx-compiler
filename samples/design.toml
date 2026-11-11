@@ -15,6 +15,8 @@ body = "Meiryo"     # 本文
 mono = "Consolas"   # コード
 
 [sizes]
+title = 40          # 表紙のタイトル
+subtitle = 24       # 表紙のサブタイトル（「= 題名: サブタイトル」の後半）
 title_band = 24     # 見出し帯の文字（pt）
 body = 18           # 本文
 subheading = 20     # 小見出し（===）
@@ -24,8 +26,11 @@ caption = 12        # 画像キャプション
 footer = 10.5       # フッター
 
 [page]
-# slide_w = 13.333  # 横配置 16:9
+# slide_w = 13.333  # 横配置 16:9（既定）
 # slide_h = 7.5
+# A4 にしたい場合は次の2行（縦横は doctype と --orientation に従います）:
+# slide_w = 8.27    # A4 幅 210mm
+# slide_h = 11.69   # A4 高さ 297mm
 margin_x = 0.7      # 左右マージン（inch）
 band_h = 1.0        # 見出し帯の高さ
 content_top = 1.45  # 本文領域の上端

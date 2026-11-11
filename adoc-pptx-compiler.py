@@ -21,7 +21,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
-__version__ = "0.9.3.0"
+__version__ = "0.9.4.0"
 
 _WS = _re.compile(r"\s+")
 
@@ -88,6 +88,8 @@ class Design:
     font_heading: str = "Meiryo"
     font_body: str = "Meiryo"
     font_mono: str = "Consolas"
+    size_title: float = 40.0
+    size_subtitle: float = 24.0
     size_title_band: float = 24.0
     size_body: float = 18.0
     size_subheading: float = 20.0
@@ -124,7 +126,8 @@ def load_design(path):
 
     [colors] band, accent, text, sub, light, code_bg   (hex strings)
     [fonts]  heading, body, mono                      (font family names)
-    [sizes]  title_band, body, subheading, table, code, caption, footer
+    [sizes]  title, subtitle, title_band, body, subheading, table, code,
+             caption, footer
     [page]   slide_w, slide_h, margin_x, band_h, content_top, content_bottom,
              line_spacing, line_factor, line_chars    (inches / points)
     """
@@ -139,7 +142,8 @@ def load_design(path):
                    "light": "color_light", "code_bg": "color_code_bg"},
         "fonts": {"heading": "font_heading", "body": "font_body",
                   "mono": "font_mono"},
-        "sizes": {"title_band": "size_title_band", "body": "size_body",
+        "sizes": {"title": "size_title", "subtitle": "size_subtitle",
+                  "title_band": "size_title_band", "body": "size_body",
                   "subheading": "size_subheading", "table": "size_table",
                   "code": "size_code", "caption": "size_caption",
                   "footer": "size_footer"},
@@ -301,6 +305,7 @@ class Section:
 class Document:
     kind: str = ""  # DocBook root element: article / book / ...
     title: str = ""
+    subtitle: str = ""
     meta: list = field(default_factory=list)  # author / date strings
     sections: list = field(default_factory=list)
     footnotes: list = field(default_factory=list)  # global, in encounter order
@@ -554,6 +559,9 @@ class DocBookParser:
         if info is not None:
             if not self.doc.title:
                 self.doc.title = _text(_first(info, "title")).strip()
+            sub_elem = _first(info, "subtitle")
+            if sub_elem is not None:
+                self.doc.subtitle = _text(sub_elem).strip()
             author = _first(info, "author")
             if author is not None:
                 name_parts = []
@@ -570,6 +578,13 @@ class DocBookParser:
             date = _text(_first(info, "date")).strip()
             if date:
                 self.doc.meta.append(date)
+        if not self.doc.subtitle and ": " in self.doc.title:
+            # Asciidoctor partitions the title into <title> + <subtitle>,
+            # while asciidoc-py leaves the combined title. Partition here
+            # on the last ": " so both routes behave the same.
+            main, _, sub = self.doc.title.rpartition(": ")
+            if main and sub:
+                self.doc.title, self.doc.subtitle = main, sub
         front = Section(title=self.doc.title, level=1)
         has_front = False
         for child in root:
@@ -1098,20 +1113,44 @@ class Renderer:
     def title_slide(self):
         d = self.design
         slide = self._new_slide(bg=d.color_band)
+        measurer = Measurer(d)
+        title_size = d.size_title
+        title_lines = measurer.wrap([Run(self.doc.title, bold=True)],
+                                    d.font_heading, title_size,
+                                    d.content_width * 0.98)
         title_y = d.slide_h * 0.29
-        _rect(slide, d.margin_x, d.slide_h * 0.44, 2.2, 0.06, d.color_accent)
+        title_h = max(len(title_lines), 1) * title_size * 1.2 / 72.0
         _, tf = _textbox(slide, d.margin_x, title_y, d.content_width, 1.6)
         tf.word_wrap = True
         run = tf.paragraphs[0].add_run()
         run.text = self.doc.title
-        _set_run_font(run, d, 40, bold=True, color="color_light",
+        _set_run_font(run, d, title_size, bold=True, color="color_light",
                       family=d.font_heading)
         run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        if self.doc.subtitle:
+            sub_size = d.size_subtitle
+            sub_y = title_y + title_h + 0.12
+            _, tf = _textbox(slide, d.margin_x, sub_y, d.content_width, 0.9)
+            tf.word_wrap = True
+            run = tf.paragraphs[0].add_run()
+            run.text = self.doc.subtitle
+            _set_run_font(run, d, sub_size, color="color_light",
+                          family=d.font_heading)
+            sub_lines = measurer.wrap([Run(self.doc.subtitle)],
+                                      d.font_heading, sub_size,
+                                      d.content_width * 0.98)
+            bar_y = sub_y + \
+                max(len(sub_lines), 1) * sub_size * 1.2 / 72.0 + 0.28
+            meta_y = bar_y + d.slide_h * 0.045
+        else:
+            bar_y = d.slide_h * 0.44
+            meta_y = d.slide_h * 0.485
+        _rect(slide, d.margin_x, bar_y, 2.2, 0.06, d.color_accent)
         if self.doc.meta:
-            _, tf = _textbox(slide, d.margin_x, d.slide_h * 0.485,
+            _, tf = _textbox(slide, d.margin_x, meta_y,
                              d.content_width, 0.8)
             run = tf.paragraphs[0].add_run()
-            run.text = "　/　".join(self.doc.meta)
+            run.text = "\u3000/\u3000".join(self.doc.meta)
             _set_run_font(run, d, 16, color="color_light")
 
     def content_slide(self, page):
@@ -1351,6 +1390,7 @@ def compile_adoc(src, dst, design=None, frontend="auto", overflow="continue",
         "input": src_abs,
         "output": out_abs,
         "doctitle": doc.title,
+        "subtitle": doc.subtitle,
         "kind": doc.kind,
         "orientation": "portrait" if design.slide_h > design.slide_w
                        else "landscape",
@@ -1423,8 +1463,14 @@ def main(argv=None):
     print(f"wrote {report['output']} ({report['slides']} slides)")
     for warning in report["warnings"]:
         print(f"warning: {warning}")
+    explanations = {
+        "inline:inlinemediaobject(alt text only)":
+            "文中のインライン画像は、画像ではなく代替テキストで表示しています"
+            "（ブロック画像 image:: は通常通り埋め込まれます）",
+    }
     for item in report["unsupported"]:
-        print(f"unsupported: {item}")
+        note = explanations.get(item)
+        print(f"unsupported: {item}" + (f" — {note}" if note else ""))
     return 0
 
 

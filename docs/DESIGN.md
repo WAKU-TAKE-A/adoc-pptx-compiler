@@ -152,7 +152,8 @@ doctype で決まる（book=縦配置、それ以外=横配置、`--orientation`
 
 残件（2026-11-11 時点）:
 
-- 実機 Asciidoctor（DocBook 5）経路での通し確認（開発環境には asciidoc-py のみ）。
+- ~~実機 Asciidoctor（DocBook 5）経路での通し確認~~ → 2026-11-11 にユーザーの
+  Windows 実機で変換成功を確認済み（sample002、--design 指定時も正常）。
 - 画像の明示サイズ指定への対応。
 - 改ページ `<<<` と水平線の扱い。
 - sidebar / example など未対応ブロックのカバー範囲拡大（現状は報告のみ）。
