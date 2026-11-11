@@ -59,7 +59,7 @@ def all_texts(prs):
 
 
 def test_version():
-    assert mod.__version__ == "0.9.3.1"
+    assert mod.__version__ == "0.9.4.0"
 
 
 def test_app_base_dir_script_mode():
@@ -342,3 +342,70 @@ def test_inline_image_message_is_explained(tmp_path, capsys):
     prs = Presentation(str(out))
     joined = "\n".join(all_texts(prs))
     assert "lena.jpg" in joined
+
+
+DB5_SUBTITLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<book xmlns="http://docbook.org/ns/docbook" version="5.0">
+<info><title>メインタイトル</title><subtitle>サブタイトルです</subtitle>
+<author><personname>著者 太郎</personname></author></info>
+<chapter><title>第一章</title><simpara>本文です。</simpara></chapter>
+</book>
+"""
+
+COMBINED_TITLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<article>
+  <articleinfo>
+    <title>メインタイトル: サブタイトルです</title>
+  </articleinfo>
+  <section><title>節</title><simpara>本文です。</simpara></section>
+</article>
+"""
+
+
+def test_subtitle_from_docbook5(tmp_path):
+    xml = tmp_path / "sub.xml"
+    xml.write_text(DB5_SUBTITLE_XML, encoding="utf-8")
+    doc = mod.parse_docbook(str(xml))
+    assert doc.title == "メインタイトル"
+    assert doc.subtitle == "サブタイトルです"
+
+
+def test_subtitle_partitioned_from_combined_title(tmp_path):
+    xml = tmp_path / "combined.xml"
+    xml.write_text(COMBINED_TITLE_XML, encoding="utf-8")
+    doc = mod.parse_docbook(str(xml))
+    assert doc.title == "メインタイトル"
+    assert doc.subtitle == "サブタイトルです"
+
+
+def test_subtitle_only_partitioned_once_on_last_colon(tmp_path):
+    xml = tmp_path / "multi.xml"
+    xml.write_text(COMBINED_TITLE_XML.replace(
+        "メインタイトル: サブタイトルです", "A: B: C"), encoding="utf-8")
+    doc = mod.parse_docbook(str(xml))
+    assert doc.title == "A: B"
+    assert doc.subtitle == "C"
+
+
+def test_subtitle_on_title_slide_only(tmp_path):
+    xml = tmp_path / "sub.xml"
+    xml.write_text(DB5_SUBTITLE_XML, encoding="utf-8")
+    out = tmp_path / "sub.pptx"
+    assert mod.main([str(xml), str(out)]) == 0
+    prs = Presentation(str(out))
+    slides_text = ["\n".join(
+        s.text_frame.text for s in slide.shapes if s.has_text_frame)
+        for slide in prs.slides]
+    assert "サブタイトルです" in slides_text[0]
+    # subtitle appears on the title slide only; footers carry the main title
+    assert all("サブタイトルです" not in t for t in slides_text[1:])
+    assert any("メインタイトル" in t for t in slides_text[1:])
+
+
+def test_subtitle_size_in_design_toml(tmp_path):
+    toml = tmp_path / "d.toml"
+    toml.write_text('[sizes]\ntitle = 44\nsubtitle = 30\n', encoding="utf-8")
+    design = mod.load_design(str(toml))
+    assert design.size_title == 44
+    assert design.size_subtitle == 30
+    assert design.unknown_keys == []
