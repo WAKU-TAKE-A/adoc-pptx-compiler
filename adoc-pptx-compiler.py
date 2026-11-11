@@ -1144,8 +1144,11 @@ class Renderer:
                       d.color_accent)
                 x += 0.3
             indent = data.get("indent", 0.0)
+            # The box must be exactly as wide as the width the text was
+            # wrapped at; anything narrower makes the renderer wrap a
+            # second time and the text outgrows its reserved height.
             _, tf = _textbox(slide, x + indent, y,
-                             data["width"] - indent + 0.3, atom.height)
+                             data["width"], atom.height)
             _fill_lines(tf, data["lines"], d, data["size"])
             return y + atom.height
         if atom.kind == "subheading":

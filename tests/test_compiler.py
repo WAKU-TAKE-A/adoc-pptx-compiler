@@ -269,3 +269,30 @@ def test_measurer_fullwidth_rules():
     # monospace: full-width glyphs measure 1em, latin 0.6em
     assert m.char_width_pt("あ", "Consolas", 10.0, mono=True) == 10.0
     assert m.char_width_pt("a", "Consolas", 10.0, mono=True) == 6.0
+
+
+def test_nested_list_box_width_matches_wrap(tmp_path):
+    xml_text = """<?xml version="1.0" encoding="UTF-8"?>
+<article><articleinfo><title>入れ子</title></articleinfo>
+<section><title>節</title>
+<itemizedlist>
+  <listitem><simpara>親項目</simpara>
+    <itemizedlist>
+      <listitem><simpara>これは入れ子になった長い項目のテキストです。折り返しの幅が描画の箱幅と一致しなければなりません。</simpara></listitem>
+    </itemizedlist>
+  </listitem>
+</itemizedlist></section></article>"""
+    xml = tmp_path / "nested.xml"
+    xml.write_text(xml_text, encoding="utf-8")
+    out = tmp_path / "nested.pptx"
+    mod.compile_adoc(str(xml), str(out))
+    prs = Presentation(str(out))
+    slide = list(prs.slides)[1]
+    target = None
+    for shape in slide.shapes:
+        if shape.has_text_frame and "入れ子になった長い項目" in shape.text_frame.text:
+            target = shape
+    assert target is not None
+    # wrapped at content_width - level indent (0.32) - prefix zone (0.3)
+    expected = (13.333 - 1.4 - 0.32 - 0.3) * 914400
+    assert abs(target.width - expected) < 2000
