@@ -473,7 +473,7 @@ def test_title_background_image(tmp_path):
             if s.shape_type == 13]  # PICTURE
     assert len(pics) == 1
     # no background color is painted when an image is used
-    assert prs.slides[0]._element.find(qn("p:bg")) is None
+    assert next(prs.slides[0]._element.iter(qn("p:bg")), None) is None
     assert abs(pics[0].width - prs.slide_width) < 1000
     assert abs(pics[0].height - prs.slide_height) < 1000
 
@@ -489,7 +489,7 @@ def test_title_background_missing_warns(tmp_path, capsys):
         capsys.readouterr().out
     # fallback paints the band color as the slide background
     prs = Presentation(str(out))
-    assert prs.slides[0]._element.find(qn("p:bg")) is not None
+    assert next(prs.slides[0]._element.iter(qn("p:bg")), None) is not None
 
 
 def test_toc_title_attribute(tmp_path):
