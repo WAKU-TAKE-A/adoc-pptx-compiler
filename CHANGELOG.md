@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.6.0 (2026-11-11)
+
+- `--design` が asciidoctor-pdf のテーマ形式（YAML）の読み込みに対応
+  （`.yml` / `.yaml`、対応キーの範囲内）。書いたキーだけが既定値を
+  上書きする。対応キーは samples/theme.yml が一覧を兼ねる。
+- 見出し帯の色をレベル別に分離: `heading.h1_band_color`（book の章）と
+  `h2_band_color`（節）。帯の高さとアクセント線はレベル共通。
+  表紙の地色（`title_page.background_color`）と表ヘッダー
+  （`table.head.background_color`）も帯から独立させた。
+  TOML の `[colors] band` / `[sizes] title_band` は従来通り両レベルに効く。
+- テーマの `page.size`（`A4` 等の名前、または寸法）と `page.layout`
+  （`--orientation` 未指定時のヒント）に対応。
+
 ## 0.9.5.0 (2026-11-11)
 
 - 表紙の背景画像: `:title-page-background-image: image:...[]` を採用。

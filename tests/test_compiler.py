@@ -60,7 +60,7 @@ def all_texts(prs):
 
 
 def test_version():
-    assert mod.__version__ == "0.9.5.0"
+    assert mod.__version__ == "0.9.6.0"
 
 
 def test_app_base_dir_script_mode():
@@ -252,7 +252,8 @@ def test_design_override(tmp_path):
     toml.write_text('[colors]\nband = "FF0000"\n[sizes]\nbody = 20\n',
                     encoding="utf-8")
     design = mod.load_design(str(toml))
-    assert design.color_band == "FF0000"
+    assert design.color_h1_band == "FF0000"
+    assert design.color_h2_band == "FF0000"
     assert design.size_body == 20
     assert design.unknown_keys == []
     xml = tmp_path / "doc.xml"
@@ -500,3 +501,78 @@ def test_toc_title_attribute(tmp_path):
     assert mod.main([str(src), str(out)]) == 0
     prs = Presentation(str(out))
     assert "もくじ" in "\n".join(all_texts(prs))
+
+
+THEME = """\
+heading:
+  h1_band_color: 'AA0000'
+  h2_band_color: '00BB00'
+  band_height: 0.8in
+base:
+  font_size: 20
+page:
+  size: A4
+font:
+  catalog:
+    meiryo: Meiryo
+"""
+
+
+def test_theme_yaml_loader(tmp_path):
+    theme = tmp_path / "theme.yml"
+    theme.write_text(THEME, encoding="utf-8")
+    design = mod.load_design(str(theme))
+    assert design.color_h1_band == "AA0000"
+    assert design.color_h2_band == "00BB00"
+    assert design.band_h == pytest.approx(0.8)
+    assert design.size_body == 20
+    assert design.slide_w == pytest.approx(8.268)
+    assert design.slide_h == pytest.approx(11.693)
+    assert design.unknown_keys == ["font"]
+
+
+def test_theme_partial_keeps_defaults(tmp_path):
+    theme = tmp_path / "theme.yml"
+    theme.write_text("title_page:\n  background_color: '123456'\n",
+                     encoding="utf-8")
+    design = mod.load_design(str(theme))
+    assert design.color_title_bg == "123456"
+    assert design.color_h2_band == "1F3A5F"
+    assert design.size_body == 18
+    assert design.unknown_keys == []
+
+
+def test_theme_band_color_by_level(tmp_path):
+    theme = tmp_path / "theme.yml"
+    theme.write_text(THEME, encoding="utf-8")
+    design = mod.load_design(str(theme))
+    xml = tmp_path / "book.xml"
+    xml.write_text(BOOK, encoding="utf-8")
+    out = tmp_path / "book.pptx"
+    mod.compile_adoc(str(xml), str(out), design=design)
+    prs = Presentation(str(out))
+    first_slide = list(prs.slides)[1]
+    assert str(first_slide.shapes[0].fill.fore_color.rgb) == "AA0000"
+    xml2 = tmp_path / "doc.xml"
+    xml2.write_text(DOCBOOK, encoding="utf-8")
+    out2 = tmp_path / "doc.pptx"
+    mod.compile_adoc(str(xml2), str(out2), design=design)
+    prs2 = Presentation(str(out2))
+    section_slide = list(prs2.slides)[1]
+    assert str(section_slide.shapes[0].fill.fore_color.rgb) == "00BB00"
+
+
+def test_theme_title_page_background(tmp_path):
+    theme = tmp_path / "theme.yml"
+    theme.write_text("title_page:\n  background_color: '123456'\n",
+                     encoding="utf-8")
+    design = mod.load_design(str(theme))
+    xml = tmp_path / "doc.xml"
+    xml.write_text(DOCBOOK, encoding="utf-8")
+    out = tmp_path / "out.pptx"
+    mod.compile_adoc(str(xml), str(out), design=design)
+    prs = Presentation(str(out))
+    title_slide = list(prs.slides)[0]
+    vals = [el.get("val") for el in title_slide._element.iter()
+            if el.tag.endswith("srgbClr")]
+    assert "123456" in vals
