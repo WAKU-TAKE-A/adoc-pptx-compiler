@@ -1,0 +1,56 @@
+# adoc-pptx-compiler のデザイン設定（asciidoctor-pdf テーマ形式）
+# --design に .yml / .yaml を渡すとこの形式で読みます。
+# 書いたキーだけが既定値を上書きします（値はいずれも現在の既定値）。
+# ★ はスライド固有の拡張キー（asciidoctor-pdf のテーマには無いもの）。
+# これ以外のテーマキーは未対応で、レポートの design_unknown_keys に出ます。
+
+page:
+  size: [13.333in, 7.5in]        # 16:9。"A4" のような名前も可
+  # layout: landscape            # 書くと向きを固定する（--orientation 未指定時、
+                                 # doctype による自動判定より優先）。既定では書かない
+  margin: [0, 0.7in, 0, 0.7in]   # 左右マージンのみ使用（上下は帯等が担う）
+
+base:
+  font_family: Meiryo
+  font_size: 18
+  font_color: '222222'
+  line_height: 1.3
+
+heading:
+  font_family: Meiryo
+  font_color: 'FFFFFF'           # 帯の中の文字色
+  h1_font_size: 24
+  h2_font_size: 24
+  h3_font_size: 20
+  h3_font_color: '1F3A5F'        # 小見出しの文字色（未指定なら帯の色）
+  h1_band_color: '1F3A5F'        # ★ 章スライド（book）の帯の色
+  h2_band_color: '1F3A5F'        # ★ 節スライドの帯の色（目次も同じ）
+  band_height: 1.0in             # ★ 帯の高さ（h1/h2 共通）
+  band_accent_color: 'E8A33D'    # ★ 帯下・表紙の線、注意書きの帯
+
+title_page:
+  background_color: '1F3A5F'     # 表紙の地色（未指定なら帯の色）
+  font_color: 'DCE6F2'           # サブタイトル・署名行の文字色
+  title:
+    font_size: 40
+  subtitle:
+    font_size: 24
+
+table:
+  font_size: 14
+  head:
+    background_color: '1F3A5F'   # 未指定なら帯の色
+    font_color: 'FFFFFF'         # 未指定なら白
+
+code:
+  font_family: Consolas
+  font_size: 12.5
+  background_color: 'F2F2F2'
+
+caption:
+  font_size: 12
+  font_color: '777777'           # 未指定なら footer と同じ薄色
+
+footer:
+  font_size: 10.5
+  font_color: '777777'

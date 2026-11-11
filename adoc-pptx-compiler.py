@@ -21,7 +21,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
-__version__ = "0.9.5.0"
+__version__ = "0.9.6.0"
 
 _WS = _re.compile(r"\s+")
 
@@ -79,7 +79,16 @@ class Design:
     band_h: float = 1.0
     content_top: float = 1.45
     content_bottom: float = 6.9
-    color_band: str = "1F3A5F"
+    color_h1_band: str = "1F3A5F"
+    color_h2_band: str = "1F3A5F"
+    color_band_text: str = "FFFFFF"
+    color_title_bg: str = ""         # unset: the band color
+    color_table_head: str = ""       # unset: the band color
+    color_table_head_text: str = ""  # unset: white
+    color_subheading: str = ""       # unset: the band color
+    color_caption: str = ""          # unset: color_sub
+    color_footer: str = ""           # unset: color_sub
+    layout: str = ""                 # theme page.layout hint
     color_accent: str = "E8A33D"
     color_text: str = "222222"
     color_sub: str = "777777"
@@ -90,7 +99,8 @@ class Design:
     font_mono: str = "Consolas"
     size_title: float = 40.0
     size_subtitle: float = 24.0
-    size_title_band: float = 24.0
+    size_band_h1: float = 24.0
+    size_band_h2: float = 24.0
     size_body: float = 18.0
     size_subheading: float = 20.0
     size_table: float = 14.0
@@ -120,30 +130,226 @@ class Design:
     def content_height(self):
         return self.content_bottom - self.content_top
 
+    def band_color(self, level):
+        return self.color_h1_band if level == 1 else self.color_h2_band
+
+    def band_size(self, level):
+        return self.size_band_h1 if level == 1 else self.size_band_h2
+
+
+def _color_value(value):
+    return str(value).strip().lstrip("#").upper()
+
+
+def _dim_in(value):
+    """Theme dimension -> inches. Numbers are points (theme convention);
+    strings may carry a unit (in / mm / cm / pt)."""
+    if isinstance(value, (int, float)):
+        return float(value) / 72.0
+    m = _re.match(r"^([\d.]+)\s*(in|mm|cm|pt)?$", str(value).strip())
+    if not m:
+        return None
+    factor = {"in": 1.0, "mm": 1 / 25.4, "cm": 1 / 2.54,
+              "pt": 1 / 72.0}[m.group(2) or "pt"]
+    return float(m.group(1)) * factor
+
+
+_PAGE_SIZES = {"A4": (8.268, 11.693), "A3": (11.693, 16.535),
+               "A5": (5.827, 8.268), "LETTER": (8.5, 11.0),
+               "LEGAL": (8.5, 14.0)}
+
+
+def _page_size_value(value):
+    if isinstance(value, str):
+        name = value.strip().upper()
+        if name in _PAGE_SIZES:
+            return _PAGE_SIZES[name]
+        parts = _re.split(r"[x\u00d7]", value)
+        if len(parts) == 2:
+            dims = [_dim_in(p) for p in parts]
+            if all(d is not None for d in dims):
+                return tuple(dims)
+        return None
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        dims = [_dim_in(v) for v in value]
+        if all(d is not None for d in dims):
+            return tuple(dims)
+    return None
+
+
+def _margin_x_value(value):
+    if isinstance(value, (list, tuple)):
+        if len(value) == 1:
+            return _dim_in(value[0])
+        if len(value) >= 2:
+            return _dim_in(value[1])
+        return None
+    return _dim_in(value)
+
+
+# Theme keys recognised by the YAML loader, as a nested template.
+_THEME_KNOWN = {
+    "page": {"size": {}, "layout": {}, "margin": {}},
+    "base": {"font_family": {}, "font_size": {}, "font_color": {},
+             "line_height": {}},
+    "heading": {"font_family": {}, "font_color": {},
+                "h1_font_size": {}, "h2_font_size": {},
+                "h3_font_size": {}, "h3_font_color": {},
+                "h1_band_color": {}, "h2_band_color": {},
+                "band_height": {}, "band_accent_color": {}},
+    "title_page": {"background_color": {}, "font_color": {},
+                   "title": {"font_size": {}},
+                   "subtitle": {"font_size": {}}},
+    "table": {"font_size": {},
+              "head": {"background_color": {}, "font_color": {}}},
+    "code": {"font_family": {}, "font_size": {}, "background_color": {}},
+    "caption": {"font_size": {}, "font_color": {}},
+    "footer": {"font_size": {}, "font_color": {}},
+}
+
+
+def _theme_unknown(node, known, prefix=""):
+    out = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            dotted = f"{prefix}{key}"
+            if key not in known:
+                out.append(dotted)
+            else:
+                out.extend(_theme_unknown(value, known[key],
+                                          dotted + "."))
+    return out
+
+
+def _load_theme(design, path):
+    """Load an asciidoctor-pdf-style theme YAML (supported subset).
+
+    Only the keys in _THEME_KNOWN have an effect; anything else is
+    reported as an unknown key rather than silently accepted. Keys not
+    present keep their built-in defaults, so a theme file only needs
+    to state what it overrides, exactly like a PDF theme.
+    """
+    try:
+        import yaml
+    except ImportError as exc:
+        raise FrontendError(
+            "reading a theme YAML requires PyYAML "
+            "(pip install pyyaml)") from exc
+    with open(resolve_input_path(path), encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    unknown = _theme_unknown(data, _THEME_KNOWN)
+
+    def section(name):
+        value = data.get(name)
+        return value if isinstance(value, dict) else {}
+
+    def put(sec, key, attr, conv):
+        if key in sec and sec[key] is not None:
+            value = conv(sec[key])
+            if value is None:
+                unknown.append(f"{sec_name}.{key}")
+            else:
+                setattr(design, attr, value)
+
+    page = section("page")
+    sec_name = "page"
+    if "size" in page:
+        size = _page_size_value(page["size"])
+        if size is None:
+            unknown.append("page.size")
+        else:
+            design.slide_w, design.slide_h = size
+    if "layout" in page:
+        design.layout = str(page["layout"]).strip().lower()
+    if "margin" in page:
+        margin_x = _margin_x_value(page["margin"])
+        if margin_x is None:
+            unknown.append("page.margin")
+        else:
+            design.margin_x = margin_x
+    base = section("base")
+    sec_name = "base"
+    put(base, "font_family", "font_body", str)
+    put(base, "font_size", "size_body", float)
+    put(base, "font_color", "color_text", _color_value)
+    put(base, "line_height", "line_spacing", float)
+    heading = section("heading")
+    sec_name = "heading"
+    put(heading, "font_family", "font_heading", str)
+    put(heading, "font_color", "color_band_text", _color_value)
+    put(heading, "h1_font_size", "size_band_h1", float)
+    put(heading, "h2_font_size", "size_band_h2", float)
+    put(heading, "h3_font_size", "size_subheading", float)
+    put(heading, "h3_font_color", "color_subheading", _color_value)
+    put(heading, "h1_band_color", "color_h1_band", _color_value)
+    put(heading, "h2_band_color", "color_h2_band", _color_value)
+    put(heading, "band_height", "band_h", _dim_in)
+    put(heading, "band_accent_color", "color_accent", _color_value)
+    title_page = section("title_page")
+    sec_name = "title_page"
+    put(title_page, "background_color", "color_title_bg", _color_value)
+    put(title_page, "font_color", "color_light", _color_value)
+    put(section("title_page").get("title") or {}, "font_size",
+        "size_title", float)
+    put(section("title_page").get("subtitle") or {}, "font_size",
+        "size_subtitle", float)
+    table = section("table")
+    sec_name = "table"
+    put(table, "font_size", "size_table", float)
+    head = table.get("head")
+    put(head if isinstance(head, dict) else {}, "background_color",
+        "color_table_head", _color_value)
+    put(head if isinstance(head, dict) else {}, "font_color",
+        "color_table_head_text", _color_value)
+    code = section("code")
+    sec_name = "code"
+    put(code, "font_family", "font_mono", str)
+    put(code, "font_size", "size_code", float)
+    put(code, "background_color", "color_code_bg", _color_value)
+    caption = section("caption")
+    sec_name = "caption"
+    put(caption, "font_size", "size_caption", float)
+    put(caption, "font_color", "color_caption", _color_value)
+    footer = section("footer")
+    sec_name = "footer"
+    put(footer, "font_size", "size_footer", float)
+    put(footer, "font_color", "color_footer", _color_value)
+    design.unknown_keys = sorted(set(unknown))
+    return design
+
 
 def load_design(path):
-    """Load a design TOML file. Recognised keys:
+    """Load a design file: TOML, or an asciidoctor-pdf-style theme YAML
+    (.yml / .yaml, supported subset; see _THEME_KNOWN).
 
+    TOML keys:
     [colors] band, accent, text, sub, light, code_bg   (hex strings)
     [fonts]  heading, body, mono                      (font family names)
     [sizes]  title, subtitle, title_band, body, subheading, table, code,
              caption, footer
     [page]   slide_w, slide_h, margin_x, band_h, content_top, content_bottom,
              line_spacing, line_factor, line_chars    (inches / points)
+
+    The TOML [colors] band and [sizes] title_band set both heading
+    levels (h1 and h2) at once; the theme format can split them.
     """
     design = Design()
     if not path:
         return design
+    if str(path).lower().endswith((".yml", ".yaml")):
+        return _load_theme(design, path)
     import tomllib
 
     keymap = {
-        "colors": {"band": "color_band", "accent": "color_accent",
+        "colors": {"band": ("color_h1_band", "color_h2_band"),
+                   "accent": "color_accent",
                    "text": "color_text", "sub": "color_sub",
                    "light": "color_light", "code_bg": "color_code_bg"},
         "fonts": {"heading": "font_heading", "body": "font_body",
                   "mono": "font_mono"},
         "sizes": {"title": "size_title", "subtitle": "size_subtitle",
-                  "title_band": "size_title_band", "body": "size_body",
+                  "title_band": ("size_band_h1", "size_band_h2"),
+                  "body": "size_body",
                   "subheading": "size_subheading", "table": "size_table",
                   "code": "size_code", "caption": "size_caption",
                   "footer": "size_footer"},
@@ -164,9 +370,11 @@ def load_design(path):
             if attr is None:
                 unknown.append(f"{section}.{key}")
             else:
-                setattr(design, attr, value)
-                if attr == "content_bottom":
-                    design._cb_explicit = True
+                for target in (attr if isinstance(attr, tuple)
+                               else (attr,)):
+                    setattr(design, target, value)
+                    if target == "content_bottom":
+                        design._cb_explicit = True
     for section in data:
         if section not in keymap:
             unknown.append(section)
@@ -1085,6 +1293,18 @@ def _fill_lines(tf, lines, design, size, mono=False, default_color="color_text")
 
 class Renderer:
     def __init__(self, doc, design):
+        # Content slides carry the band of the document's primary
+        # heading level: chapters (h1) for books, sections (h2) for
+        # articles. Split colors that were left unset fall back to it.
+        self.level = 1 if doc.kind == "book" else 2
+        self.band = design.band_color(self.level)
+        self.band_size = design.band_size(self.level)
+        self.title_bg_color = design.color_title_bg or self.band
+        self.table_head_color = design.color_table_head or self.band
+        self.table_head_text = design.color_table_head_text or "FFFFFF"
+        self.subhead_color = design.color_subheading or self.band
+        self.caption_color = design.color_caption or design.color_sub
+        self.footer_color = design.color_footer or design.color_sub
         self.doc = doc
         self.design = design
         self.prs = Presentation()
@@ -1109,12 +1329,14 @@ class Renderer:
         run = tf.paragraphs[0].add_run()
         run.text = self.doc.title
         _set_run_font(run, d, d.size_footer, color="color_sub")
+        run.font.color.rgb = _rgb(self.footer_color)
         _, tf = _textbox(slide, d.slide_w - d.margin_x - 1.0, fy, 1.0, 0.3)
         para = tf.paragraphs[0]
         para.alignment = PP_ALIGN.RIGHT
         run = para.add_run()
         run.text = str(self.page_no)
         _set_run_font(run, d, d.size_footer, color="color_sub")
+        run.font.color.rgb = _rgb(self.footer_color)
 
     def _title_bg_image(self, slide):
         d = self.design
@@ -1141,7 +1363,7 @@ class Renderer:
         # With a background image the band color is not painted at all:
         # the image alone is the title page background.
         slide = self._new_slide(
-            bg=None if self.doc.title_bg else d.color_band)
+            bg=None if self.doc.title_bg else self.title_bg_color)
         if self.doc.title_bg:
             self._title_bg_image(slide)
         measurer = Measurer(d)
@@ -1187,7 +1409,7 @@ class Renderer:
     def content_slide(self, page):
         d = self.design
         slide = self._new_slide()
-        _rect(slide, 0, 0, d.slide_w, d.band_h, d.color_band)
+        _rect(slide, 0, 0, d.slide_w, d.band_h, self.band)
         _rect(slide, 0, d.band_h + 0.1, d.slide_w, 0.045, d.color_accent)
         _, tf = _textbox(slide, d.margin_x, 0.18, d.content_width, 0.65)
         tf.vertical_anchor = MSO_ANCHOR.MIDDLE
@@ -1196,9 +1418,9 @@ class Renderer:
         if page.cont > 0:
             title += "（続き）"
         run.text = title
-        _set_run_font(run, d, d.size_title_band, bold=True,
+        _set_run_font(run, d, self.band_size, bold=True,
                       family=d.font_heading)
-        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        run.font.color.rgb = _rgb(d.color_band_text)
         y = d.content_top
         for atom in page.atoms:
             y = self._draw_atom(slide, atom, y) + 0.08
@@ -1235,7 +1457,8 @@ class Renderer:
             run = tf.paragraphs[0].add_run()
             run.text = data["text"]
             _set_run_font(run, d, d.size_subheading, bold=True,
-                          color="color_band", family=d.font_heading)
+                          family=d.font_heading)
+            run.font.color.rgb = _rgb(self.subhead_color)
             return y + atom.height
         if atom.kind == "listing":
             _rect(slide, x, y, d.content_width, atom.height, d.color_code_bg)
@@ -1255,6 +1478,7 @@ class Renderer:
                 run = para.add_run()
                 run.text = data["caption"]
                 _set_run_font(run, d, d.size_caption, color="color_sub")
+                run.font.color.rgb = _rgb(self.caption_color)
                 bottom += 0.32
             return bottom
         if atom.kind == "missing":
@@ -1301,28 +1525,28 @@ class Renderer:
                 run = tf.paragraphs[0].add_run()
                 run.text = row[ci] if ci < len(row) else ""
                 _set_run_font(run, d, d.size_table, bold=is_header,
-                              color="color_light" if is_header else "color_text")
+                              color="color_text")
                 if is_header:
-                    run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                    run.font.color.rgb = _rgb(self.table_head_text)
                 fill = cell.fill
                 fill.solid()
                 fill.fore_color.rgb = _rgb(
-                    d.color_band if is_header else
+                    self.table_head_color if is_header else
                     ("FFFFFF" if ri % 2 == 0 else "EFF3F9"))
         return y + atom.height
 
     def toc_slide(self, entries, toc_title):
         d = self.design
         slide = self._new_slide()
-        _rect(slide, 0, 0, d.slide_w, d.band_h, d.color_band)
+        _rect(slide, 0, 0, d.slide_w, d.band_h, self.band)
         _rect(slide, 0, d.band_h + 0.1, d.slide_w, 0.045, d.color_accent)
         _, tf = _textbox(slide, d.margin_x, 0.18, d.content_width, 0.65)
         tf.vertical_anchor = MSO_ANCHOR.MIDDLE
         run = tf.paragraphs[0].add_run()
         run.text = toc_title
-        _set_run_font(run, d, d.size_title_band, bold=True,
+        _set_run_font(run, d, self.band_size, bold=True,
                       family=d.font_heading)
-        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        run.font.color.rgb = _rgb(d.color_band_text)
         y = d.content_top
         for level, title, slide_no in entries:
             indent = 0.35 * (level - 1)
@@ -1408,8 +1632,14 @@ def compile_adoc(src, dst, design=None, frontend="auto", overflow="continue",
     doc = parse_docbook(xml_path)
     # Orientation: books are portrait, everything else landscape, unless
     # the caller or the design file says otherwise.
-    portrait = orientation == "portrait" or \
-        (orientation == "auto" and doc.kind == "book")
+    if orientation == "portrait":
+        portrait = True
+    elif orientation == "landscape":
+        portrait = False
+    elif design.layout in ("portrait", "landscape"):
+        portrait = design.layout == "portrait"
+    else:
+        portrait = doc.kind == "book"
     design.set_orientation(portrait)
     src_dir = os.path.dirname(src_abs)
     extra_warnings = []
@@ -1503,7 +1733,7 @@ def main(argv=None):
         description="Compile an AsciiDoc document into an editable .pptx deck.")
     parser.add_argument("src", help="input .adoc (or DocBook .xml)")
     parser.add_argument("dst", help="output .pptx")
-    parser.add_argument("--design", help="design TOML file")
+    parser.add_argument("--design", help="design file: TOML, or theme YAML (.yml/.yaml)")
     parser.add_argument("--frontend", choices=["auto", "asciidoctor", "asciidoc-py"],
                         default="auto", help="AsciiDoc frontend (default: auto)")
     parser.add_argument("--overflow", choices=["continue", "error"],

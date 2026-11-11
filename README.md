@@ -73,6 +73,13 @@ python adoc-pptx-compiler.py samples/sample.adoc sample.pptx
 一覧を兼ねています（同梱の値は既定値そのもの）。未知のキーは無視され、
 レポートの `design_unknown_keys` に記録されます。
 
+`.yml` / `.yaml` のファイルは asciidoctor-pdf のテーマ形式（の対応範囲）として
+読みます。[samples/theme.yml](samples/theme.yml) が対応キーの一覧を兼ねて
+います。テーマと同じく、書いたキーだけが既定値を上書きします。スライド固有の
+拡張は見出し帯の3キー（`heading.h1_band_color` / `h2_band_color` /
+`band_height`、`band_accent_color`）だけです。`line_chars` と `line_factor`
+は TOML / CLI 専用です。
+
 ## 運用での調整
 
 変換は決定論的なので、見え方の微調整は「数値を変えて再変換」で行えます。
