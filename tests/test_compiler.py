@@ -5,6 +5,7 @@ import sys
 import pytest
 from pptx import Presentation
 from pptx.util import Inches
+from pptx.oxml.ns import qn
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC = importlib.util.spec_from_file_location(
@@ -471,6 +472,8 @@ def test_title_background_image(tmp_path):
     pics = [s for s in prs.slides[0].shapes
             if s.shape_type == 13]  # PICTURE
     assert len(pics) == 1
+    # no background color is painted when an image is used
+    assert prs.slides[0]._element.find(qn("p:bg")) is None
     assert abs(pics[0].width - prs.slide_width) < 1000
     assert abs(pics[0].height - prs.slide_height) < 1000
 
@@ -484,6 +487,9 @@ def test_title_background_missing_warns(tmp_path, capsys):
     assert mod.main([str(src), str(out)]) == 0
     assert "title-page-background-image not found" in \
         capsys.readouterr().out
+    # fallback paints the band color as the slide background
+    prs = Presentation(str(out))
+    assert prs.slides[0]._element.find(qn("p:bg")) is not None
 
 
 def test_toc_title_attribute(tmp_path):

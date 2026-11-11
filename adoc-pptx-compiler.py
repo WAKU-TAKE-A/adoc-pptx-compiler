@@ -1138,7 +1138,10 @@ class Renderer:
 
     def title_slide(self):
         d = self.design
-        slide = self._new_slide(bg=d.color_band)
+        # With a background image the band color is not painted at all:
+        # the image alone is the title page background.
+        slide = self._new_slide(
+            bg=None if self.doc.title_bg else d.color_band)
         if self.doc.title_bg:
             self._title_bg_image(slide)
         measurer = Measurer(d)
